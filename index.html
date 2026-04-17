@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Multi-Threaded Path Tracer | Web Workers</title>
+    <style>
+        * {
+            user-select: none;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0c12;
+            font-family: 'Segoe UI', 'Inter', system-ui, -apple-system, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 24px;
+        }
+
+        .container {
+            background: #111318;
+            border-radius: 32px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05);
+            padding: 20px;
+        }
+
+        .canvas-panel {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: flex-start;
+        }
+
+        canvas {
+            display: block;
+            border-radius: 20px;
+            box-shadow: 0 12px 28px rgba(0,0,0,0.5);
+            background: #000;
+            cursor: crosshair;
+            width: 800px;
+            height: 450px;
+        }
+
+        .controls {
+            background: rgba(20, 22, 32, 0.8);
+            backdrop-filter: blur(8px);
+            border-radius: 24px;
+            padding: 18px 22px;
+            min-width: 260px;
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .controls h3 {
+            margin: 0 0 12px 0;
+            font-size: 1.2rem;
+            font-weight: 500;
+            color: #eef;
+            letter-spacing: -0.2px;
+        }
+
+        .control-group {
+            margin-bottom: 18px;
+        }
+
+        label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            color: #bbc;
+            margin-bottom: 8px;
+        }
+
+        input, select {
+            width: 100%;
+            background: #1e202c;
+            border: 1px solid #2c2f3c;
+            color: #f0f0f0;
+            padding: 8px 12px;
+            border-radius: 14px;
+            font-size: 0.85rem;
+            font-family: monospace;
+            outline: none;
+            transition: 0.2s;
+        }
+
+        input:focus, select:focus {
+            border-color: #6c8eff;
+            box-shadow: 0 0 0 2px rgba(108,142,255,0.3);
+        }
+
+        button {
+            background: #2a2e42;
+            border: none;
+            color: white;
+            width: 100%;
+            padding: 10px 0;
+            border-radius: 40px;
+            font-weight: 600;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-top: 6px;
+            font-family: inherit;
+        }
+
+        button.primary {
+            background: #5f7ef2;
+            box-shadow: 0 2px 8px rgba(95,126,242,0.3);
+        }
+
+        button.primary:hover {
+            background: #7b96ff;
+            transform: scale(0.98);
+        }
+
+        .stats {
+            margin-top: 16px;
+            font-size: 0.75rem;
+            background: #0b0d14;
+            padding: 10px 12px;
+            border-radius: 18px;
+            font-family: monospace;
+            color: #9aa6cf;
+        }
+
+        .stats p {
+            margin: 4px 0;
+        }
+
+        hr {
+            border-color: #2c2f3c;
+            margin: 12px 0;
+        }
+
+        .badge {
+            font-size: 0.7rem;
+            background: #00000055;
+            border-radius: 20px;
+            padding: 2px 10px;
+            display: inline-block;
+        }
+
+        .warning {
+            background: #442200;
+            border: 1px solid #ff8800;
+            color: #ffaa66;
+            padding: 8px 12px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            font-size: 0.7rem;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="canvas-panel">
+        <canvas id="renderCanvas" width="800" height="450"></canvas>
+        <div class="controls">
+            <h3>🔆 Path Tracer <span class="badge">Progressive | Multi-Threaded</span></h3>
+            <div id="sabWarning" class="warning" style="display:none;">⚠️ Running in fallback mode (single-threaded). For full multi-threading, serve with COOP/COEP headers.</div>
+            <div class="control-group">
+                <label>Samples per pixel (accumulated) <span id="samplesValue">32</span></label>
+                <input type="range" id="samplesSlider" min="1" max="256" step="1" value="32">
+            </div>
+            <div class="control-group">
+                <label>Max bounces <span id="bouncesValue">6</span></label>
+                <input type="range" id="bouncesSlider" min="1" max="12" step="1" value="6">
+            </div>
+            <div class="control-group">
+                <label>Scene preset</label>
+                <select id="sceneSelect">
+                    <option value="cornell">✨ Cornell Box (Area light)</option>
+                    <option value="glassball">🔮 Glass & Metal Spheres</option>
+                    <option value="envmap">🌍 HDR Environment + Diffuse</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label>Denoise (basic blur) <input type="checkbox" id="denoiseToggle"></label>
+            </div>
+            <button id="resetBtn" class="primary">⟳ RESTART RENDER</button>
+            <div class="stats">
+                <p>⚡ Mode: <span id="renderMode">Detecting...</span></p>
+                <p>🎯 Samples / pixel: <span id="currentSamples">0</span></p>
+                <p>⏱️ Last tile time: <span id="tileTime">—</span> ms</p>
+                <p>📊 Progressive pass: <span id="passCount">0</span></p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ------------------------------------------------------------------
+    // 1. Check for SharedArrayBuffer support
+    // ------------------------------------------------------------------
+    const hasSharedArrayBuffer = typeof SharedArrayBuffer !== 'undefined';
+    const warningEl = document.getElementById('sabWarning');
+    const renderModeSpan = document.getElementById('renderMode');
+    
+    if (!hasSharedArrayBuffer) {
+        warningEl.style.display = 'block';
+        renderModeSpan.innerText = 'Single-thread (fallback)';
+        renderModeSpan.style.color = '#ffaa66';
+    } else {
+        renderModeSpan.innerText = 'Multi-thread (Web Workers)';
+        renderModeSpan.style.color = '#66ff66';
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Main Renderer Orchestrator
+    // ------------------------------------------------------------------
+    const canvas = document.getElementById('renderCanvas');
+    const ctx = canvas.getContext('2d');
+    const width = canvas.width = 800;
+    const height = canvas.height = 450;
+    const pixelCount = width * height;
+
+    // Shared pixel buffer (if SAB available)
+    let pixelBuffer = null;
+    let accumBuffer = null;
+    
+    if (hasSharedArrayBuffer) {
+        pixelBuffer = new SharedArrayBuffer(pixelCount * 4 * 4);
+        accumBuffer = new Float32Array(pixelBuffer);
+    } else {
+        // Fallback: regular array
+        accumBuffer = new Float32Array(pixelCount * 4);
+    }
+
+    // Rendering state
+    let workerPool = [];
+    let activeWorkers = 0;
+    let renderingActive = true;
+    let currentSampleCount = 0;
+    let totalSamplesTarget = 32;
+    let maxBounces = 6;
+    let denoiseEnabled = false;
+    let currentSceneId = 'cornell';
+    let currentPassActive = false;
+    let pendingTileCallbacks = 0;
+    let useWorkers = hasSharedArrayBuffer;
+
+    // UI elements
+    const samplesSlider = document.getElementById('samplesSlider');
+    const samplesValue = document.getElementById('samplesValue');
+    const bouncesSlider = document.getElementById('bouncesSlider');
+    const bouncesValue = document.getElementById('bouncesValue');
+    const sceneSelect = document.getElementById('sceneSelect');
+    const resetBtn = document.getElementById('resetBtn');
+    const denoiseToggle = document.getElementById('denoiseToggle');
+    const currentSamplesSpan = document.getElementById('currentSamples');
+    const passCountSpan = document.getElementById('passCount');
+    const tileTimeSpan = document.getElementById('tileTime');
+
+    // Tile configuration
+    const TILE_SIZE = 32;
+    const tilesX = Math.ceil(width / TILE_SIZE);
+    const tilesY = Math.ceil(height / TILE_SIZE);
+    const totalTiles = tilesX * tilesY;
+
+    // ------------------------------------------------------------------
+    // 3. Scene definitions
+    // ------------------------------------------------------------------
+    function buildCornellBoxScene() {
+        const spheres = [
+            { type: 'sphere', center: [-0.5, -0.5, 0.8], radius: 0.5, material: { type: 'metal', albedo: [0.95, 0.85, 0.6], roughness: 0.2 } },
+            { type: 'sphere', center: [0.55, -0.4, 0.6], radius: 0.45, material: { type: 'dielectric', albedo: [1,1,1], ior: 1.52 } },
+            { type: 'sphere', center: [0, 0.9, 0.2], radius: 0.25, material: { type: 'lambertian', albedo: [0.3, 0.7, 0.9] } }
+        ];
+        const planes = [
+            { type: 'plane', center: [0, -1.2, 0], normal: [0, 1, 0], material: { type: 'lambertian', albedo: [0.78, 0.78, 0.78] } },
+            { type: 'plane', center: [0, 1.5, 0], normal: [0, -1, 0], material: { type: 'lambertian', albedo: [0.78, 0.78, 0.78] } },
+            { type: 'plane', center: [-1.2, 0, 0], normal: [1, 0, 0], material: { type: 'lambertian', albedo: [0.9, 0.2, 0.2] } },
+            { type: 'plane', center: [1.2, 0, 0], normal: [-1, 0, 0], material: { type: 'lambertian', albedo: [0.2, 0.9, 0.2] } },
+            { type: 'plane', center: [0, 0, -1.5], normal: [0, 0, 1], material: { type: 'lambertian', albedo: [0.8, 0.8, 0.8] } }
+        ];
+        const lights = [
+            { type: 'area', position: [0, 1.48, 0], size: [0.8, 0.8], color: [14, 12, 10], normal: [0, -1, 0] }
+        ];
+        return { spheres, planes, lights, envMap: null, bgColor: [0.03, 0.03, 0.06] };
+    }
+
+    function buildGlassMetalScene() {
+        const spheres = [
+            { type: 'sphere', center: [-0.8, -0.2, 1.0], radius: 0.55, material: { type: 'metal', albedo: [0.95, 0.7, 0.3], roughness: 0.1 } },
+            { type: 'sphere', center: [0.7, -0.3, 1.1], radius: 0.6, material: { type: 'dielectric', albedo: [1,1,1], ior: 1.52 } },
+            { type: 'sphere', center: [0.0, 0.3, 0.5], radius: 0.4, material: { type: 'lambertian', albedo: [0.9, 0.4, 0.6] } },
+            { type: 'sphere', center: [-0.2, -0.8, 0.7], radius: 0.4, material: { type: 'lambertian', albedo: [0.2, 0.7, 0.9] } }
+        ];
+        const planes = [
+            { type: 'plane', center: [0, -1.2, 0], normal: [0, 1, 0], material: { type: 'lambertian', albedo: [0.5, 0.5, 0.5] } }
+        ];
+        const lights = [
+            { type: 'point', position: [1.5, 2.0, 1.0], color: [8, 8, 6], intensity: 1.5 },
+            { type: 'point', position: [-1.0, 1.2, 0.5], color: [4, 5, 8], intensity: 1.2 }
+        ];
+        return { spheres, planes, lights, envMap: null, bgColor: [0.05, 0.08, 0.12] };
+    }
+
+    function buildEnvScene() {
+        const spheres = [
+            { type: 'sphere', center: [0, -0.4, 1.2], radius: 0.65, material: { type: 'metal', albedo: [0.85, 0.9, 0.95], roughness: 0.15 } },
+            { type: 'sphere', center: [-0.9, -0.2, 0.9], radius: 0.5, material: { type: 'dielectric', albedo: [1,1,1], ior: 1.45 } }
+        ];
+        const planes = [
+            { type: 'plane', center: [0, -1.0, 0], normal: [0, 1, 0], material: { type: 'lambertian', albedo: [0.6, 0.7, 0.8] } }
+        ];
+        const lights = [
+            { type: 'directional', direction: [-0.5, -1, -0.3], color: [4, 3.5, 2.5], intensity: 1.8 }
+        ];
+        return { spheres, planes, lights, envMap: 'gradient_sky', bgColor: [0.2, 0.3, 0.5] };
+    }
+
+    function getCurrentScene() {
+        if (currentSceneId === 'cornell') return buildCornellBoxScene();
+        if (currentSceneId === 'glassball') return buildGlassMetalScene();
+        return buildEnvScene();
+    }
+
+    // ------------------------------------------------------------------
+    // 4. Path Tracing Core (used by both worker and fallback)
+    // ------------------------------------------------------------------
+    const rtCore = {
+        randomFloat: () => Math.random(),
+        
+        vadd(a,b) { return [a[0]+b[0], a[1]+b[1], a[2]+b[2]]; },
+        vsub(a,b) { return [a[0]-b[0], a[1]-b[1], a[2]-b[2]]; },
+        vmul(a,b) { return [a[0]*b[0], a[1]*b[1], a[2]*b[2]]; },
+        vscale(a,t) { return [a[0]*t, a[1]*t, a[2]*t]; },
+        vdot(a,b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; },
+        vcross(a,b) { return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; },
+        vnorm(a) { let l = Math.sqrt(this.vdot(a,a)); return l>0?[a[0]/l,a[1]/l,a[2]/l]:[0,0,0]; },
+        
+        reflect(v,n) { let d = 2*this.vdot(v,n); return this.vsub(v, this.vscale(n,d)); },
+        
+        refract(v,n, eta) {
+            let dt = this.vdot(v,n);
+            let disc = 1.0 - eta*eta*(1-dt*dt);
+            if(disc<=0) return null;
+            return this.vsub(this.vscale(v, eta), this.vscale(n, eta*dt + Math.sqrt(disc)));
+        },
+        
+        intersectSphere(ro, rd, s) {
+            let oc = this.vsub(ro, s.center);
+            let a = this.vdot(rd, rd);
+            let b = 2.0 * this.vdot(oc, rd);
+            let c = this.vdot(oc, oc) - s.radius*s.radius;
+            let disc = b*b - 4*a*c;
+            if(disc<0) return Infinity;
+            let t = (-b - Math.sqrt(disc))/(2*a);
+            if(t<0.001) t = (-b + Math.sqrt(disc))/(2*a);
+            return t>0.001 ? t : Infinity;
+        },
+        
+        intersectPlane(ro, rd, p) {
+            let denom = this.vdot(rd, p.normal);
+            if(Math.abs(denom)<1e-6) return Infinity;
+            let t = this.vdot(this.vsub(p.center, ro), p.normal)/denom;
+            return t>0.001 ? t : Infinity;
+        },
+        
+        trace(ro, rd, scene, depth) {
+            if(depth<=0) return [0,0,0];
+            let hitT = Infinity;
+            let hitMat = null;
+            let hitPoint = null;
+            let hitNormal = null;
+            
+            for(let s of scene.spheres) {
+                let t = this.intersectSphere(ro, rd, s);
+                if(t < hitT && t < Infinity) {
+                    hitT = t;
+                    hitMat = s.material;
+                    hitPoint = this.vadd(ro, this.vscale(rd, t));
+                    hitNormal = this.vnorm(this.vsub(hitPoint, s.center));
+                }
+            }
+            for(let p of scene.planes) {
+                let t = this.intersectPlane(ro, rd, p);
+                if(t < hitT && t < Infinity) {
+                    hitT = t;
+                    hitMat = p.material;
+                    hitPoint = this.vadd(ro, this.vscale(rd, t));
+                    hitNormal = p.normal;
+                }
+            }
+            
+            if(hitT === Infinity) {
+                if(scene.envMap === 'gradient_sky') {
+                    let tval = 0.5*(rd[1]+1);
+                    return this.vscale([0.5,0.7,1.0], tval*0.8);
+                }
+                return scene.bgColor || [0,0,0];
+            }
+            
+            let emitted = [0,0,0];
+            for(let light of scene.lights) {
+                if(light.type === 'area') {
+                    let toLight = this.vsub(light.position, hitPoint);
+                    let dist2 = this.vdot(toLight,toLight);
+                    let Ldir = this.vnorm(toLight);
+                    let ndotl = Math.max(0, this.vdot(hitNormal, Ldir));
+                    if(ndotl>0) emitted = this.vadd(emitted, this.vscale(light.color, ndotl * (1/dist2)*0.5));
+                } else if(light.type === 'point') {
+                    let Ldir = this.vnorm(this.vsub(light.position, hitPoint));
+                    let ndotl = Math.max(0, this.vdot(hitNormal, Ldir));
+                    if(ndotl>0) emitted = this.vadd(emitted, this.vscale(light.color, ndotl * light.intensity * 0.8));
+                }
+            }
+            
+            let albedo = hitMat.albedo;
+            if(hitMat.type === 'lambertian') {
+                let u = this.randomFloat()*2*Math.PI, vv = this.randomFloat();
+                let r = Math.sqrt(vv);
+                let px = r*Math.cos(u), py = r*Math.sin(u), pz = Math.sqrt(1-vv);
+                let w = hitNormal;
+                let uu = Math.abs(w[0])>0.9 ? [0,1,0] : [1,0,0];
+                let tangent = this.vnorm(this.vcross(uu, w));
+                let bitangent = this.vnorm(this.vcross(w, tangent));
+                let dir = this.vnorm(this.vadd(this.vadd(this.vscale(tangent, px), this.vscale(bitangent, py)), this.vscale(w, pz)));
+                let color = this.vmul(albedo, this.trace(hitPoint, dir, scene, depth-1));
+                return this.vadd(emitted, color);
+            } else if(hitMat.type === 'metal') {
+                let reflected = this.reflect(rd, hitNormal);
+                let rough = hitMat.roughness || 0.1;
+                let ru = (this.randomFloat()-0.5)*rough, rv = (this.randomFloat()-0.5)*rough;
+                reflected = this.vnorm(this.vadd(reflected, [ru, rv, 0]));
+                let color = this.vmul(albedo, this.trace(hitPoint, reflected, scene, depth-1));
+                return this.vadd(emitted, color);
+            } else if(hitMat.type === 'dielectric') {
+                let ior = hitMat.ior || 1.5;
+                let eta = 1/ior;
+                let n = hitNormal;
+                let cosTheta = -this.vdot(n, rd);
+                if(cosTheta < 0) { n = this.vscale(n,-1); eta = ior; cosTheta = -cosTheta; }
+                let refracted = this.refract(rd, n, eta);
+                let kr = refracted ? 0.04 + (1-0.04)*Math.pow(1-cosTheta,5) : 1;
+                let dir;
+                if(refracted && this.randomFloat() < kr) dir = refracted;
+                else dir = this.reflect(rd, n);
+                return this.vadd(emitted, this.vmul(albedo, this.trace(hitPoint, dir, scene, depth-1)));
+            }
+            return emitted;
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // 5. Render Tile Function (used by fallback mode)
+    // ------------------------------------------------------------------
+    function renderTile(tileX, tileY, tileW, tileH, camera, scene, samplesPerPixel, totalSamplesAcc) {
+        const camPos = camera.origin;
+        const lookAt = camera.lookAt;
+        const up = camera.up;
+        const fov = camera.fov;
+        const aperture = camera.aperture;
+        const focusDist = camera.focusDist;
+        
+        const dirZ = rtCore.vnorm(rtCore.vsub(lookAt, camPos));
+        const dirX = rtCore.vnorm(rtCore.vcross(up, dirZ));
+        const dirY = rtCore.vnorm(rtCore.vcross(dirZ, dirX));
+        const aspect = width/height;
+        const scale = Math.tan(fov * 0.5 * Math.PI/180);
+        
+        for(let y = tileY; y < tileY + tileH; y++) {
+            for(let x = tileX; x < tileX + tileW; x++) {
+                let color = [0,0,0];
+                for(let s = 0; s < samplesPerPixel; s++) {
+                    let jitterX = (Math.random()-0.5);
+                    let jitterY = (Math.random()-0.5);
+                    let u = (2*(x + jitterX)/width - 1) * scale * aspect;
+                    let vv = (1 - 2*(y + jitterY)/height) * scale;
+                    let rd = rtCore.vnorm(rtCore.vadd(rtCore.vadd(rtCore.vscale(dirX, u), rtCore.vscale(dirY, vv)), dirZ));
+                    let ro = camPos;
+                    if(aperture > 0) {
+                        let rndX = (Math.random()-0.5)*aperture;
+                        let rndY = (Math.random()-0.5)*aperture;
+                        let offset = rtCore.vadd(rtCore.vscale(dirX, rndX), rtCore.vscale(dirY, rndY));
+                        ro = rtCore.vadd(camPos, offset);
+                        let focalPoint = rtCore.vadd(camPos, rtCore.vscale(rd, focusDist));
+                        rd = rtCore.vnorm(rtCore.vsub(focalPoint, ro));
+                    }
+                    let col = rtCore.trace(ro, rd, scene, maxBounces);
+                    color = rtCore.vadd(color, col);
+                }
+                let invSamp = 1.0 / samplesPerPixel;
+                let idx = (y * width + x) * 4;
+                if(totalSamplesAcc === 0) {
+                    accumBuffer[idx] = color[0];
+                    accumBuffer[idx+1] = color[1];
+                    accumBuffer[idx+2] = color[2];
+                } else {
+                    let oldSum0 = accumBuffer[idx] * totalSamplesAcc;
+                    let oldSum1 = accumBuffer[idx+1] * totalSamplesAcc;
+                    let oldSum2 = accumBuffer[idx+2] * totalSamplesAcc;
+                    accumBuffer[idx] = (oldSum0 + color[0]) / (totalSamplesAcc + 1);
+                    accumBuffer[idx+1] = (oldSum1 + color[1]) / (totalSamplesAcc + 1);
+                    accumBuffer[idx+2] = (oldSum2 + color[2]) / (totalSamplesAcc + 1);
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // 6. Worker code (only if SAB available)
+    // ------------------------------------------------------------------
+    let workerUrl = null;
+    if (useWorkers) {
+        const workerCode = `
+            ${rtCore.toString()}
+            const core = eval('(' + rtCore.toString() + ')')();
+            
+            let pixelBufferRef = null;
+            let accumView = null;
+            
+            self.onmessage = function(e) {
+                if(e.data.type === 'initBuffer') {
+                    pixelBufferRef = e.data.buffer;
+                    accumView = new Float32Array(pixelBufferRef);
+                    return;
+                }
+                
+                if(e.data.type === 'renderTile') {
+                    const { tileX, tileY, tileW, tileH, width, height, samplesPerPixel, maxDepth, scene, camera, totalSamplesAccumulated } = e.data;
+                    const startTime = performance.now();
+                    
+                    const camPos = camera.origin;
+                    const lookAt = camera.lookAt;
+                    const up = camera.up;
+                    const fov = camera.fov;
+                    const aperture = camera.aperture;
+                    const focusDist = camera.focusDist;
+                    
+                    const dirZ = core.vnorm(core.vsub(lookAt, camPos));
+                    const dirX = core.vnorm(core.vcross(up, dirZ));
+                    const dirY = core.vnorm(core.vcross(dirZ, dirX));
+                    const aspect = width/height;
+                    const scale = Math.tan(fov * 0.5 * Math.PI/180);
+                    
+                    for(let y = tileY; y < tileY + tileH; y++) {
+                        for(let x = tileX; x < tileX + tileW; x++) {
+                            let color = [0,0,0];
+                            for(let s = 0; s < samplesPerPixel; s++) {
+                                let jitterX = (Math.random()-0.5);
+                                let jitterY = (Math.random()-0.5);
+                                let u = (2*(x + jitterX)/width - 1) * scale * aspect;
+                                let vv = (1 - 2*(y + jitterY)/height) * scale;
+                                let rd = core.vnorm(core.vadd(core.vadd(core.vscale(dirX, u), core.vscale(dirY, vv)), dirZ));
+                                let ro = camPos;
+                                if(aperture > 0) {
+                                    let rndX = (Math.random()-0.5)*aperture;
+                                    let rndY = (Math.random()-0.5)*aperture;
+                                    let offset = core.vadd(core.vscale(dirX, rndX), core.vscale(dirY, rndY));
+                                    ro = core.vadd(camPos, offset);
+                                    let focalPoint = core.vadd(camPos, core.vscale(rd, focusDist));
+                                    rd = core.vnorm(core.vsub(focalPoint, ro));
+                                }
+                                let col = core.trace(ro, rd, scene, maxDepth);
+                                color = core.vadd(color, col);
+                            }
+                            let invSamp = 1.0 / samplesPerPixel;
+                            let idx = (y * width + x) * 4;
+                            if(totalSamplesAccumulated === 0) {
+                                accumView[idx] = color[0];
+                                accumView[idx+1] = color[1];
+                                accumView[idx+2] = color[2];
+                            } else {
+                                let oldSum0 = accumView[idx] * totalSamplesAccumulated;
+                                let oldSum1 = accumView[idx+1] * totalSamplesAccumulated;
+                                let oldSum2 = accumView[idx+2] * totalSamplesAccumulated;
+                                accumView[idx] = (oldSum0 + color[0]) / (totalSamplesAccumulated + 1);
+                                accumView[idx+1] = (oldSum1 + color[1]) / (totalSamplesAccumulated + 1);
+                                accumView[idx+2] = (oldSum2 + color[2]) / (totalSamplesAccumulated + 1);
+                            }
+                        }
+                    }
+                    const elapsed = performance.now() - startTime;
+                    self.postMessage({ type: 'tileDone', tileTimeMs: elapsed });
+                }
+            };
+        `;
+        const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+        workerUrl = URL.createObjectURL(workerBlob);
+    }
+
+    // ------------------------------------------------------------------
+    // 7. Render Orchestration
+    // ------------------------------------------------------------------
+    let currentTileIndex = 0;
+    let samplePassInProgress = false;
+    let pendingTiles = 0;
+
+    function initWorkers(count) {
+        if (!useWorkers) return [];
+        const navThreads = navigator.hardwareConcurrency || 4;
+        const workerCount = Math.min(count || navThreads, 8);
+        const workers = [];
+        for (let i = 0; i < workerCount; i++) {
+            const worker = new Worker(workerUrl);
+            worker.postMessage({ type: 'initBuffer', buffer: pixelBuffer }, [pixelBuffer]);
+            worker.onmessage = (e) => {
+                if (e.data.type === 'tileDone') {
+                    if (e.data.tileTimeMs) tileTimeSpan.innerText = e.data.tileTimeMs.toFixed(1);
+                    pendingTiles--;
+                    scheduleNextTile(worker);
+                }
+            };
+            workers.push(worker);
+        }
+        return workers;
+    }
+
+    function scheduleNextTile(worker) {
+        if (!renderingActive) return;
+        if (currentTileIndex >= totalTiles) {
+            if (pendingTiles === 0 && samplePassInProgress) {
+                finishSamplePass();
+            }
+            return;
+        }
+        const tileId = currentTileIndex++;
+        pendingTiles++;
+        const tileX = tileId % tilesX;
+        const tileY = Math.floor(tileId / tilesX);
+        const tileW = Math.min(TILE_SIZE, width - tileX * TILE_SIZE);
+        const tileH = Math.min(TILE_SIZE, height - tileY * TILE_SIZE);
+        const scene = getCurrentScene();
+        
+        if (useWorkers && worker) {
+            const msg = {
+                type: 'renderTile',
+                tileX, tileY, tileW, tileH,
+                width, height,
+                samplesPerPixel: 1,
+                maxDepth: maxBounces,
+                scene: scene,
+                camera: {
+                    origin: [0, 0.5, 3.2],
+                    lookAt: [0, 0.2, 0],
+                    up: [0, 1, 0],
+                    fov: 55,
+                    aperture: (currentSceneId === 'cornell' ? 0.0 : 0.012),
+                    focusDist: 2.5
+                },
+                totalSamplesAccumulated: currentSampleCount
+            };
+            worker.postMessage(msg);
+        } else if (!useWorkers) {
+            // Fallback: render directly
+            const start = performance.now();
+            renderTile(tileX, tileY, tileW, tileH, {
+                origin: [0, 0.5, 3.2],
+                lookAt: [0, 0.2, 0],
+                up: [0, 1, 0],
+                fov: 55,
+                aperture: (currentSceneId === 'cornell' ? 0.0 : 0.012),
+                focusDist: 2.5
+            }, scene, 1, currentSampleCount);
+            tileTimeSpan.innerText = (performance.now() - start).toFixed(1);
+            pendingTiles--;
+            scheduleNextTile(null);
+        }
+    }
+
+    function startNextSamplePass() {
+        if (!renderingActive) return;
+        if (currentSampleCount >= totalSamplesTarget) {
+            passCountSpan.innerText = `✅ Completed (${totalSamplesTarget} spp)`;
+            if (denoiseEnabled) applyDenoise();
+            return;
+        }
+        samplePassInProgress = true;
+        currentTileIndex = 0;
+        pendingTiles = 0;
+        
+        if (useWorkers) {
+            for (let w of workerPool) {
+                scheduleNextTile(w);
+            }
+        } else {
+            // Single-threaded: render all tiles sequentially
+            function renderNextTile() {
+                if (!samplePassInProgress) return;
+                if (currentTileIndex >= totalTiles) {
+                    finishSamplePass();
+                    return;
+                }
+                const start = performance.now();
+                const tileId = currentTileIndex++;
+                const tileX = tileId % tilesX;
+                const tileY = Math.floor(tileId / tilesX);
+                const tileW = Math.min(TILE_SIZE, width - tileX * TILE_SIZE);
+                const tileH = Math.min(TILE_SIZE, height - tileY * TILE_SIZE);
+                const scene = getCurrentScene();
+                renderTile(tileX, tileY, tileW, tileH, {
+                    origin: [0, 0.5, 3.2],
+                    lookAt: [0, 0.2, 0],
+                    up: [0, 1, 0],
+                    fov: 55,
+                    aperture: (currentSceneId === 'cornell' ? 0.0 : 0.012),
+                    focusDist: 2.5
+                }, scene, 1, currentSampleCount);
+                tileTimeSpan.innerText = (performance.now() - start).toFixed(1);
+                updateDisplayFromBuffer();
+                setTimeout(renderNextTile, 1);
+            }
+            renderNextTile();
+        }
+        
+        if (useWorkers && workerPool.length === 0) finishSamplePass();
+    }
+
+    function finishSamplePass() {
+        if (!samplePassInProgress) return;
+        samplePassInProgress = false;
+        currentSampleCount++;
+        currentSamplesSpan.innerText = currentSampleCount;
+        passCountSpan.innerText = `${currentSampleCount} / ${totalSamplesTarget}`;
+        updateDisplayFromBuffer();
+        
+        if (currentSampleCount < totalSamplesTarget) {
+            setTimeout(() => startNextSamplePass(), 10);
+        } else {
+            passCountSpan.innerText = `✅ Completed (${totalSamplesTarget} spp)`;
+            if (denoiseEnabled) applyDenoise();
+        }
+    }
+
+    function updateDisplayFromBuffer() {
+        const imgData = ctx.createImageData(width, height);
+        const invSamples = 1.0 / Math.max(1, currentSampleCount);
+        for (let i = 0; i < pixelCount; i++) {
+            let r = accumBuffer[i*4] * invSamples;
+            let g = accumBuffer[i*4+1] * invSamples;
+            let b = accumBuffer[i*4+2] * invSamples;
+            r = r / (1 + r);
+            g = g / (1 + g);
+            b = b / (1 + b);
+            imgData.data[i*4] = Math.pow(Math.min(1.0, r), 1/2.2) * 255;
+            imgData.data[i*4+1] = Math.pow(Math.min(1.0, g), 1/2.2) * 255;
+            imgData.data[i*4+2] = Math.pow(Math.min(1.0, b), 1/2.2) * 255;
+            imgData.data[i*4+3] = 255;
+        }
+        ctx.putImageData(imgData, 0, 0);
+    }
+
+    function applyDenoise() {
+        if (!denoiseEnabled) return;
+        const temp = new Float32Array(pixelCount * 4);
+        temp.set(accumBuffer);
+        const invSamp = 1.0 / Math.max(1, currentSampleCount);
+        for (let i = 0; i < pixelCount; i++) {
+            if (i % width === 0 || i % width === width-1 || i < width || i >= pixelCount - width) continue;
+            let r=0,g=0,b=0, count=0;
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    const idx = i + dy*width + dx;
+                    if (idx>=0 && idx<pixelCount) {
+                        r += accumBuffer[idx*4] * invSamp;
+                        g += accumBuffer[idx*4+1] * invSamp;
+                        b += accumBuffer[idx*4+2] * invSamp;
+                        count++;
+                    }
+                }
+            }
+            if(count>0) {
+                temp[i*4] = (r/count) * currentSampleCount;
+                temp[i*4+1] = (g/count) * currentSampleCount;
+                temp[i*4+2] = (b/count) * currentSampleCount;
+            }
+        }
+        accumBuffer.set(temp);
+        updateDisplayFromBuffer();
+    }
+
+    function resetRender() {
+        renderingActive = false;
+        setTimeout(() => {
+            renderingActive = true;
+            currentSampleCount = 0;
+            for (let i = 0; i < pixelCount * 4; i++) accumBuffer[i] = 0;
+            samplePassInProgress = false;
+            updateDisplayFromBuffer();
+            startNextSamplePass();
+        }, 50);
+    }
+
+    function setupUI() {
+        samplesSlider.addEventListener('input', () => {
+            totalSamplesTarget = parseInt(samplesSlider.value);
+            samplesValue.innerText = totalSamplesTarget;
+            resetRender();
+        });
+        bouncesSlider.addEventListener('input', () => {
+            maxBounces = parseInt(bouncesSlider.value);
+            bouncesValue.innerText = maxBounces;
+            resetRender();
+        });
+        sceneSelect.addEventListener('change', (e) => {
+            currentSceneId = e.target.value;
+            resetRender();
+        });
+        denoiseToggle.addEventListener('change', (e) => {
+            denoiseEnabled = e.target.checked;
+            if (currentSampleCount >= totalSamplesTarget) applyDenoise();
+            else updateDisplayFromBuffer();
+        });
+        resetBtn.addEventListener('click', () => resetRender());
+    }
+
+    // Initialize
+    setupUI();
+    if (useWorkers) {
+        workerPool = initWorkers(navigator.hardwareConcurrency || 4);
+        activeWorkers = workerPool.length;
+    }
+    resetRender();
+</script>
+</body>
+</html>
